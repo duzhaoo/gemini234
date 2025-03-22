@@ -7,13 +7,17 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
 import Image from "next/image";
-import { Upload, ImageIcon } from "lucide-react";
+import { Upload, ImageIcon, RefreshCcw } from "lucide-react";
+import { Progress } from "@/components/ui/progress";
 
 interface ImageEditorFormProps {
   onImageEdited?: (imageUrl: string) => void;
   initialImageUrl?: string;
   readOnlyUrl?: boolean;
 }
+
+// 轮询间隔 (ms)
+const POLLING_INTERVAL = 2000;
 
 export function ImageEditorForm({ 
   onImageEdited, 
@@ -27,7 +31,12 @@ export function ImageEditorForm({
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
+  // 新增状态
+  const [taskId, setTaskId] = useState<string | null>(null);
+  const [taskStatus, setTaskStatus] = useState<string>("pending");
+  const [statusMessage, setStatusMessage] = useState<string>("");
+  const [pollingCount, setPollingCount] = useState(0);
+  
   // Update imageUrl when initialImageUrl changes
   useEffect(() => {
     if (initialImageUrl) {
@@ -84,9 +93,13 @@ export function ImageEditorForm({
 
     setIsLoading(true);
     setError(null);
+    setStatusMessage("准备处理图片...");
+    setTaskStatus("pending");
+    setTaskId(null);
+    setPollingCount(0);
 
     try {
-      let response;
+      let targetImageUrl;
       
       if (selectedFile) {
         // 如果有上传的文件，先上传图片
@@ -94,6 +107,7 @@ export function ImageEditorForm({
         formData.append('image', selectedFile);
         formData.append('prompt', "用户上传的原始图片"); // 添加固定提示词
         
+        setStatusMessage("正在上传图片...");
         const uploadResponse = await fetch('/api/upload', {
           method: 'POST',
           body: formData
@@ -105,52 +119,116 @@ export function ImageEditorForm({
         }
         
         const uploadData = await uploadResponse.json();
-        const uploadedImageUrl = uploadData.data?.imageUrl;
+        targetImageUrl = uploadData.data?.imageUrl;
         
-        if (!uploadedImageUrl) {
+        if (!targetImageUrl) {
           throw new Error("上传图片后未返回有效的URL");
         }
-        
-        // 使用上传后的图片URL进行编辑
-        response = await fetch("/api/edit", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ prompt, imageUrl: uploadedImageUrl }),
-        });
       } else {
-        // 使用输入的URL进行编辑
-        response = await fetch("/api/edit", {
-          method: "POST",
-          headers: {
-            "Content-Type": "application/json",
-          },
-          body: JSON.stringify({ prompt, imageUrl }),
-        });
+        // 使用输入的URL
+        targetImageUrl = imageUrl;
       }
+      
+      // 调用新的开始任务API
+      setStatusMessage("正在启动编辑任务...");
+      const startResponse = await fetch("/api/edit/start", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({ prompt, imageUrl: targetImageUrl }),
+      });
 
-      const data = await response.json();
-
-      if (!response.ok) {
+      if (!startResponse.ok) {
+        const errorData = await startResponse.json();
         // 检查是否是速率限制错误
-        if (response.status === 429 || (data.error?.code === "RATE_LIMIT_EXCEEDED")) {
+        if (startResponse.status === 429 || (errorData.error?.code === "RATE_LIMIT_EXCEEDED")) {
           throw new Error("超出 API 速率限制，请等待几分钟后再试。");
         } else {
-          throw new Error(data.error?.message || "编辑图像失败");
+          throw new Error(errorData.error?.message || "启动编辑任务失败");
         }
       }
 
-      if (onImageEdited && data.data?.imageUrl) {
-        onImageEdited(data.data.imageUrl);
+      const startData = await startResponse.json();
+      const newTaskId = startData.data?.taskId;
+      
+      if (!newTaskId) {
+        throw new Error("未能获取有效的任务ID");
       }
+      
+      // 设置任务ID并开始轮询
+      setTaskId(newTaskId);
+      setTaskStatus("processing");
+      setStatusMessage("图片处理中...");
+      
+      // 开始轮询任务状态
+      pollTaskStatus(newTaskId);
+      
     } catch (err) {
       setError(err instanceof Error ? err.message : "发生错误");
-    } finally {
       setIsLoading(false);
     }
   };
-
+  
+  // 轮询任务状态
+  const pollTaskStatus = async (taskId: string) => {
+    try {
+      // 增加轮询计数
+      setPollingCount(prev => prev + 1);
+      
+      const statusResponse = await fetch(`/api/edit/status?taskId=${taskId}`);
+      
+      if (!statusResponse.ok) {
+        throw new Error("获取任务状态失败");
+      }
+      
+      const statusData = await statusResponse.json();
+      const currentStatus = statusData.data?.status;
+      
+      // 更新状态信息
+      setTaskStatus(currentStatus);
+      
+      // 根据状态更新消息
+      switch (currentStatus) {
+        case "pending":
+          setStatusMessage("等待处理...");
+          break;
+        case "processing":
+          setStatusMessage("正在处理图片...");
+          break;
+        case "completed":
+          if (statusData.data?.result?.url) {
+            // 成功完成，更新图片URL
+            setStatusMessage("处理完成！");
+            setIsLoading(false);
+            
+            // 调用回调函数
+            if (onImageEdited) {
+              onImageEdited(statusData.data.result.url);
+            }
+          } else {
+            throw new Error("处理完成但未返回图片URL");
+          }
+          return; // 完成，停止轮询
+        case "failed":
+          throw new Error(statusData.data?.error?.message || "图片处理失败");
+        default:
+          setStatusMessage(`当前状态: ${currentStatus}`);
+      }
+      
+      // 继续轮询，除非已完成或失败
+      if (currentStatus !== "completed" && currentStatus !== "failed") {
+        setTimeout(() => pollTaskStatus(taskId), POLLING_INTERVAL);
+      } else {
+        setIsLoading(false);
+      }
+      
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "轮询状态时发生错误");
+      setIsLoading(false);
+    }
+  };
+  
   return (
     <Card className="w-full">
       <CardHeader>
@@ -254,26 +332,33 @@ export function ImageEditorForm({
               )}
             </div>
             <div className="flex flex-col space-y-2">
-              <Label htmlFor="editPrompt">编辑指令</Label>
+              <Label htmlFor="prompt">修改指令</Label>
               <Textarea
-                id="editPrompt"
-                placeholder="请描述您想如何编辑这张图像..."
+                id="prompt"
+                placeholder="输入描述你想要的图像的文本..."
                 value={prompt}
                 onChange={(e) => setPrompt(e.target.value)}
-                className="min-h-[120px]"
                 disabled={isLoading}
-                autoFocus={readOnlyUrl}
+                className="min-h-32 resize-none"
               />
-              {error && (
-                <div className="text-sm text-red-500 rounded p-2 bg-red-50 border border-red-200">
-                  <p className="font-semibold">错误：</p>
-                  <p>{error}</p>
-                  {error.includes('速率限制') && (
-                    <p className="mt-2">提示：如果您频繁遇到速率限制，可以尝试等待几分钟后再尝试，或减少请求频率。</p>
-                  )}
-                </div>
-              )}
             </div>
+            
+            {/* 新增：处理状态和进度显示 */}
+            {isLoading && (
+              <div className="flex flex-col space-y-2 mt-2">
+                <div className="flex justify-between items-center">
+                  <span className="text-sm font-medium">{statusMessage}</span>
+                  <span className="text-xs text-muted-foreground">
+                    {taskStatus === "processing" && `轮询中 (${pollingCount})`}
+                  </span>
+                </div>
+                <Progress value={taskStatus === "completed" ? 100 : pollingCount * 5} />
+              </div>
+            )}
+            
+            {error && (
+              <div className="text-red-500 text-sm mt-2">{error}</div>
+            )}
           </div>
         </CardContent>
         <CardFooter>

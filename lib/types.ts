@@ -28,23 +28,15 @@ export interface ImageMetadata {
   feishuSyncFailed?: boolean; // 标识是否同步到飞书失败
 }
 
-// 飞书多维表格记录接口
-export interface FeishuRecord {
-  id: string;          // 系统内部ID
-  url?: string;        // 图片URL
-  fileToken?: string;  // 飞书文件Token
-  prompt?: string;     // 提示词
-  timestamp?: number;  // 时间戳
-  parentId?: string;   // 父图片ID
-  rootParentId?: string; // 根父图片ID
-  type?: string;       // 图片类型
-  recordId?: string;   // 飞书多维表格记录ID
-}
-
 // Define the interface for API response
 export interface ApiResponse {
   success: boolean;
-  data?: any;  // 修改为any类型，支持不同API返回不同的数据结构
+  data?: {
+    imageUrl?: string;
+    description?: string;
+    metadata?: ImageMetadata;
+    history?: HistoryItem[];
+  };
   error?: {
     code: string;
     message: string;
