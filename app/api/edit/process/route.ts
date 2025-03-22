@@ -56,13 +56,15 @@ export async function POST(req: NextRequest) {
       const result = await callGeminiApi(prompt, imageData, mimeType);
       
       if (!result || result.isError) {
+        console.error("调用Gemini API失败:", result?.error || "未知错误");
         return NextResponse.json({
           success: false,
           taskId,
           status: 'failed',
           error: {
             code: "GEMINI_API_ERROR",
-            message: "调用Gemini API失败"
+            message: "调用Gemini API失败",
+            details: result?.error?.message || "未知错误"
           }
         } as ApiResponse, { status: 500 });
       }
@@ -71,6 +73,7 @@ export async function POST(req: NextRequest) {
       const { imageData: processedImageData, mimeType: responseType, textResponse } = parseGeminiResponse(result.response);
       
       if (!processedImageData) {
+        console.error("未能生成图片，文本响应:", textResponse);
         return NextResponse.json({
           success: false,
           taskId,
@@ -78,14 +81,12 @@ export async function POST(req: NextRequest) {
           error: {
             code: "NO_IMAGE_GENERATED",
             message: "未能生成图片",
-            details: textResponse
+            details: textResponse || "Gemini API未返回图片数据"
           }
         } as ApiResponse, { status: 500 });
       }
       
-      // 更新进度
-      taskStatus.progress = 80;
-      taskStatus.message = '图片处理完成，准备保存';
+      console.log(`图片处理成功，返回处理后的图片数据，任务ID: ${taskId}`);
       
       // 返回处理结果
       return NextResponse.json({

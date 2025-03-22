@@ -156,13 +156,49 @@ export function ImageEditorForm({
         throw new Error("未能获取有效的任务ID");
       }
       
-      // 设置任务ID并开始轮询
       setTaskId(newTaskId);
       setTaskStatus("processing");
-      setStatusMessage("图片处理中...");
       
-      // 开始轮询任务状态
-      pollTaskStatus(newTaskId);
+      // 直接调用process API以获取结果，传递完整任务数据
+      setStatusMessage("正在处理图片...");
+      const imageId = await extractImageIdFromUrl(targetImageUrl);
+      if (!imageId) {
+        throw new Error("无法从图片URL提取图片ID");
+      }
+      
+      const processResponse = await fetch('/api/edit/process', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          taskId: newTaskId,
+          imageId,
+          prompt
+        })
+      });
+      
+      if (!processResponse.ok) {
+        const errorData = await processResponse.json();
+        throw new Error(errorData.error?.message || "处理图片失败");
+      }
+      
+      const processData = await processResponse.json();
+      
+      if (!processData.success) {
+        throw new Error(processData.error?.message || "图片处理失败");
+      }
+      
+      // 如果处理成功但没有图片数据，开始轮询
+      if (!processData.data?.processedImageData) {
+        setStatusMessage("正在等待处理结果...");
+        pollTaskStatus(newTaskId);
+        return;
+      }
+      
+      // 如果有图片数据，直接保存
+      setStatusMessage("图片处理完成，正在保存...");
+      await saveProcessedImage(newTaskId, processData.data);
       
     } catch (err) {
       setError(err instanceof Error ? err.message : "发生错误");
@@ -275,7 +311,30 @@ export function ImageEditorForm({
       setIsLoading(false);
     }
   };
-  
+
+  const extractImageIdFromUrl = async (url: string) => {
+    try {
+      // 对于飞书URL，可能需要向后端请求提取
+      const response = await fetch(`/api/edit/extract-image-id?url=${encodeURIComponent(url)}`);
+      if (!response.ok) {
+        throw new Error('提取图片ID失败');
+      }
+      const data = await response.json();
+      return data.imageId;
+    } catch (error) {
+      console.error('提取图片ID失败:', error);
+      // 尝试从URL中直接提取
+      if (url.includes('open.feishu.cn')) {
+        // 尝试提取飞书图片ID
+        const match = url.match(/([a-zA-Z0-9-]+)(?:\?|$)/);
+        if (match && match[1]) {
+          return match[1];
+        }
+      }
+      throw new Error('无法从URL提取图片ID');
+    }
+  };
+
   return (
     <Card className="w-full">
       <CardHeader>
