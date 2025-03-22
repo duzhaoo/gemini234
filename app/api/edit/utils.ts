@@ -137,13 +137,26 @@ export async function callGeminiApi(prompt: string, imageData: string, mimeType:
  */
 export function parseGeminiResponse(response: any) {
   try {
-    console.log(`成功获取响应，包含 ${response.parts.length} 个部分`);
+    // 首先检查response是否存在及其结构
+    if (!response) {
+      console.log('响应为空');
+      return {
+        imageData: null,
+        mimeType: 'image/png',
+        textResponse: ''
+      };
+    }
+
+    // 兼容性检查，处理不同版本API可能有不同的响应格式
+    const parts = response.parts || (response.candidates?.[0]?.content?.parts) || [];
+    console.log(`成功获取响应，包含 ${parts.length} 个部分`);
     
     let imageData: string | null = null;
     let mimeType = 'image/png';
     let textResponse = '';
     
-    for (const part of response.parts) {
+    // 遍历所有部分
+    for (const part of parts) {
       if (part.text) {
         textResponse += part.text;
       }
@@ -152,6 +165,11 @@ export function parseGeminiResponse(response: any) {
         console.log(`获取到图片数据，类型: ${part.inlineData.mimeType}`);
         imageData = part.inlineData.data;
         mimeType = part.inlineData.mimeType;
+      } else if (part.inline_data) {
+        // 处理可能的命名差异
+        console.log(`获取到图片数据（替代格式），类型: ${part.inline_data.mime_type || part.inline_data.mimeType}`);
+        imageData = part.inline_data.data;
+        mimeType = part.inline_data.mime_type || part.inline_data.mimeType || 'image/png';
       }
     }
     
