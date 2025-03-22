@@ -176,6 +176,36 @@ export function ImageEditorForm({
       // 增加轮询计数
       setPollingCount(prev => prev + 1);
       
+      // 首次轮询直接调用处理结果API，而不是状态API
+      if (pollingCount === 0) {
+        try {
+          const processResponse = await fetch(`/api/edit/process-result?taskId=${taskId}`);
+          
+          if (!processResponse.ok) {
+            if (processResponse.status === 404) {
+              // 处理结果还未准备好，继续轮询
+              setStatusMessage("正在处理图片，请稍候...");
+              setTimeout(() => pollTaskStatus(taskId), POLLING_INTERVAL);
+              return;
+            }
+            throw new Error("获取处理结果失败");
+          }
+          
+          const processData = await processResponse.json();
+          
+          if (processData.success && processData.data) {
+            // 处理成功，保存图片
+            setStatusMessage("图片处理完成，正在保存...");
+            await saveProcessedImage(taskId, processData.data);
+            return;
+          }
+        } catch (error) {
+          // 如果处理结果API失败，回退到状态轮询
+          console.warn("获取处理结果失败，回退到状态轮询", error);
+        }
+      }
+      
+      // 正常状态轮询
       const statusResponse = await fetch(`/api/edit/status?taskId=${taskId}`);
       
       if (!statusResponse.ok) {
@@ -183,48 +213,65 @@ export function ImageEditorForm({
       }
       
       const statusData = await statusResponse.json();
-      const currentStatus = statusData.data?.status;
       
-      // 更新状态信息
-      setTaskStatus(currentStatus);
-      
-      // 根据状态更新消息
-      switch (currentStatus) {
-        case "pending":
-          setStatusMessage("等待处理...");
-          break;
-        case "processing":
-          setStatusMessage("正在处理图片...");
-          break;
-        case "completed":
-          if (statusData.data?.result?.url) {
-            // 成功完成，更新图片URL
-            setStatusMessage("处理完成！");
-            setIsLoading(false);
-            
-            // 调用回调函数
-            if (onImageEdited) {
-              onImageEdited(statusData.data.result.url);
-            }
-          } else {
-            throw new Error("处理完成但未返回图片URL");
-          }
-          return; // 完成，停止轮询
-        case "failed":
-          throw new Error(statusData.data?.error?.message || "图片处理失败");
-        default:
-          setStatusMessage(`当前状态: ${currentStatus}`);
+      // 在我们的无状态架构中，status API总是返回processing状态
+      // 我们需要有一个最大尝试次数限制，避免无限轮询
+      if (pollingCount >= 30) {  // 最多轮询30次，约60秒
+        throw new Error("处理超时，请稍后重试");
       }
       
-      // 继续轮询，除非已完成或失败
-      if (currentStatus !== "completed" && currentStatus !== "failed") {
-        setTimeout(() => pollTaskStatus(taskId), POLLING_INTERVAL);
-      } else {
-        setIsLoading(false);
-      }
-      
+      // 继续轮询
+      setStatusMessage(`正在处理图片 (${pollingCount}/30)...`);
+      setTimeout(() => pollTaskStatus(taskId), POLLING_INTERVAL);
     } catch (err) {
       setError(err instanceof Error ? err.message : "轮询状态时发生错误");
+      setIsLoading(false);
+    }
+  };
+  
+  // 保存处理过的图片
+  const saveProcessedImage = async (taskId: string, processData: any) => {
+    try {
+      if (!processData.processedImageData) {
+        throw new Error("处理结果中没有图片数据");
+      }
+      
+      setStatusMessage("正在保存处理后的图片...");
+      
+      const saveResponse = await fetch("/api/edit/save", {
+        method: "POST",
+        headers: {
+          "Content-Type": "application/json",
+        },
+        body: JSON.stringify({
+          taskId,
+          processedImageData: processData.processedImageData,
+          responseType: processData.responseType,
+          imageRecord: processData.imageRecord,
+          fileName: `edited_${Date.now()}.jpg`
+        }),
+      });
+      
+      if (!saveResponse.ok) {
+        const errorData = await saveResponse.json();
+        throw new Error(errorData.error?.message || "保存图片失败");
+      }
+      
+      const saveData = await saveResponse.json();
+      
+      if (saveData.success && saveData.data) {
+        setStatusMessage("处理完成！");
+        setIsLoading(false);
+        
+        // 调用回调函数
+        if (onImageEdited) {
+          onImageEdited(saveData.data.url);
+        }
+      } else {
+        throw new Error("保存成功但未返回图片URL");
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "保存图片时发生错误");
       setIsLoading(false);
     }
   };

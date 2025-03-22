@@ -1,102 +1,94 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getTask, updateTask } from "@/lib/task-manager";
+import { uploadImageToFeishu } from "@/lib/feishu";
 import { ApiResponse } from "@/lib/types";
-import { saveImage } from "@/lib/server-utils";
 
 /**
- * 保存处理结果API - 将处理后的图片保存到飞书
- * 此API由process端点内部触发，不直接暴露给前端
+ * 保存图片API - 将处理好的图片保存到飞书
  */
 export async function POST(req: NextRequest) {
-  console.log(`保存结果API - 请求开始处理`);
+  console.log(`保存图片API - 开始保存`);
   
   try {
     // 解析请求数据
-    const { taskId } = await req.json();
+    const {
+      processedImageData,
+      responseType,
+      imageRecord,
+      taskId,
+      fileName,
+      newImageName
+    } = await req.json();
     
-    if (!taskId) {
+    if (!processedImageData) {
       return NextResponse.json({
         success: false,
+        taskId,
         error: {
-          code: "MISSING_TASK_ID",
-          message: "缺少任务ID"
+          code: "MISSING_IMAGE_DATA",
+          message: "缺少图片数据"
         }
       } as ApiResponse, { status: 400 });
     }
     
-    // 获取任务信息
-    const task = await getTask(taskId);
-    
-    if (!task) {
+    if (!imageRecord || !imageRecord.fileToken) {
       return NextResponse.json({
         success: false,
+        taskId,
         error: {
-          code: "TASK_NOT_FOUND",
-          message: "找不到指定任务"
-        }
-      } as ApiResponse, { status: 404 });
-    }
-    
-    // 检查任务是否包含处理结果
-    if (!task.internal?.processedImageData) {
-      return NextResponse.json({
-        success: false,
-        error: {
-          code: "NO_PROCESSED_IMAGE",
-          message: "任务中没有处理过的图片数据"
+          code: "MISSING_IMAGE_RECORD",
+          message: "缺少图片记录信息"
         }
       } as ApiResponse, { status: 400 });
     }
     
     try {
-      // 保存到飞书
-      const metadata = await saveImage(
-        task.internal.processedImageData,
-        task.prompt || "编辑图片",
-        task.internal.responseType || "image/png",
-        {
-          isUploadedImage: task.internal.isUploadedImage || false,
-          rootParentId: task.internal.systemInternalId,
-          isVercelEnv: true
-        },
-        task.internal.systemInternalId // 确保使用系统内部ID作为parentId
+      console.log(`准备上传图片到飞书，任务ID: ${taskId}`);
+      
+      // 生成文件名
+      const finalFileName = newImageName || fileName || `edited_${Date.now()}.jpg`;
+      
+      // 上传图片到飞书
+      const uploadResult = await uploadImageToFeishu(
+        processedImageData,
+        finalFileName,
+        responseType || 'image/jpeg'
       );
       
-      // 更新任务状态为已完成
-      await updateTask(taskId, {
-        status: 'completed',
-        result: {
-          id: metadata.id,
-          url: metadata.url,
-          textResponse: ""
-        }
-      });
+      if (uploadResult.error) {
+        console.error(`上传图片失败:`, uploadResult.errorMessage);
+        
+        return NextResponse.json({
+          success: false,
+          taskId,
+          status: 'failed',
+          error: {
+            code: "UPLOAD_FAILED",
+            message: "上传图片失败",
+            details: uploadResult.errorMessage
+          }
+        } as ApiResponse, { status: 500 });
+      }
       
-      // 返回成功响应
+      // 返回成功结果
       return NextResponse.json({
         success: true,
+        taskId,
+        status: 'completed',
         data: {
-          taskId,
-          status: 'completed',
-          id: metadata.id,
-          url: metadata.url
+          id: uploadResult.fileToken,
+          url: uploadResult.url,
+          name: uploadResult.name
         }
       } as ApiResponse);
+      
     } catch (error: any) {
       console.error(`保存图片失败:`, error);
       
-      // 更新任务状态为失败
-      await updateTask(taskId, {
-        status: 'failed',
-        error: {
-          code: "SAVE_ERROR",
-          message: "保存图片时出错",
-          details: error instanceof Error ? error.message : String(error)
-        }
-      });
-      
       return NextResponse.json({
         success: false,
+        taskId,
+        status: 'failed',
         error: {
           code: "SAVE_ERROR",
           message: "保存图片时出错",
@@ -105,7 +97,7 @@ export async function POST(req: NextRequest) {
       } as ApiResponse, { status: 500 });
     }
   } catch (error: any) {
-    console.error(`保存结果API - 错误:`, error);
+    console.error(`保存图片API - 错误:`, error);
     
     return NextResponse.json({
       success: false,

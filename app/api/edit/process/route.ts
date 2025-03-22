@@ -11,75 +11,58 @@ export async function POST(req: NextRequest) {
   console.log(`处理图片API - 请求开始处理`);
   
   try {
-    // 解析请求数据
-    const { taskId } = await req.json();
+    // 解析请求数据 - 接收完整任务数据而非仅任务ID
+    const { imageId, prompt, taskId } = await req.json();
     
-    if (!taskId) {
+    if (!imageId) {
       return NextResponse.json({
         success: false,
         error: {
-          code: "MISSING_TASK_ID",
-          message: "缺少任务ID"
+          code: "MISSING_IMAGE_ID",
+          message: "缺少图片ID"
+        }
+      } as ApiResponse, { status: 400 });
+    }
+
+    if (!prompt) {
+      return NextResponse.json({
+        success: false,
+        error: {
+          code: "MISSING_PROMPT",
+          message: "缺少提示词"
         }
       } as ApiResponse, { status: 400 });
     }
     
-    // 获取任务信息
-    const task = await getTask(taskId);
-    
-    if (!task) {
-      return NextResponse.json({
-        success: false,
-        error: {
-          code: "TASK_NOT_FOUND",
-          message: "找不到指定任务"
-        }
-      } as ApiResponse, { status: 404 });
-    }
-    
-    // 更新任务状态为处理中
-    await updateTask(taskId, { status: 'processing' });
-    
     try {
-      // 获取原始图片数据
-      const imageId = task.internal?.originalImageId;
+      // 构建任务状态
+      const taskStatus = {
+        id: taskId,
+        status: 'processing' as const,
+        message: '正在处理图片',
+        progress: 30
+      };
       
-      if (!imageId) {
-        throw new Error('任务中缺少原始图片ID');
-      }
+      console.log(`开始处理图片, ID: ${imageId}, 任务ID: ${taskId}`);
       
       // 从飞书获取图片
       const { imageData, mimeType, imageRecord } = await fetchImageFromFeishu(imageId);
       
-      // 更新任务中的系统内部ID
-      await updateTask(taskId, {
-        internal: {
-          ...task.internal,
-          systemInternalId: imageRecord.id,
-          fileToken: imageRecord.fileToken,
-          imageData,
-          mimeType,
-          isUploadedImage: imageRecord.type === "uploaded"
-        }
-      });
+      // 更新进度
+      taskStatus.progress = 50;
+      taskStatus.message = '图片获取成功，开始处理';
       
       // 调用Gemini API处理图片
-      const result = await callGeminiApi(task.prompt || "", imageData, mimeType);
+      const result = await callGeminiApi(prompt, imageData, mimeType);
       
       if (!result || result.isError) {
-        await updateTask(taskId, {
+        return NextResponse.json({
+          success: false,
+          taskId,
           status: 'failed',
           error: {
             code: "GEMINI_API_ERROR",
             message: "调用Gemini API失败"
-          }
-        });
-        
-        return NextResponse.json({
-          success: false,
-          error: {
-            code: "GEMINI_API_ERROR",
-            message: "处理图片失败"
           }
         } as ApiResponse, { status: 500 });
       }
@@ -88,67 +71,46 @@ export async function POST(req: NextRequest) {
       const { imageData: processedImageData, mimeType: responseType, textResponse } = parseGeminiResponse(result.response);
       
       if (!processedImageData) {
-        await updateTask(taskId, {
+        return NextResponse.json({
+          success: false,
+          taskId,
           status: 'failed',
           error: {
             code: "NO_IMAGE_GENERATED",
-            message: "未能生成图片"
-          }
-        });
-        
-        return NextResponse.json({
-          success: false,
-          error: {
-            code: "NO_IMAGE_GENERATED",
-            message: "生成图片失败"
+            message: "未能生成图片",
+            details: textResponse
           }
         } as ApiResponse, { status: 500 });
       }
       
-      // 保存处理结果到任务
-      await updateTask(taskId, {
-        internal: {
-          ...task.internal,
-          processedImageData,
-          responseType
-        }
-      });
+      // 更新进度
+      taskStatus.progress = 80;
+      taskStatus.message = '图片处理完成，准备保存';
       
-      // 触发保存结果的API
-      fetch(`${req.nextUrl.origin}/api/edit/save`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify({ taskId }),
-      }).catch(err => {
-        console.error(`触发保存结果失败:`, err);
-      });
-      
-      // 返回成功
+      // 返回处理结果
       return NextResponse.json({
         success: true,
+        taskId,
+        status: 'processing',
+        progress: 80,
         data: {
-          taskId,
-          status: 'processing',
-          message: '图片处理完成，正在保存结果'
+          processedImageData,
+          responseType,
+          imageRecord: {
+            id: imageRecord.id,
+            fileToken: imageRecord.fileToken,
+            type: imageRecord.type
+          }
         }
       } as ApiResponse);
+      
     } catch (error: any) {
       console.error(`处理图片失败:`, error);
       
-      // 更新任务状态为失败
-      await updateTask(taskId, {
-        status: 'failed',
-        error: {
-          code: "PROCESSING_ERROR",
-          message: "处理图片时出错",
-          details: error instanceof Error ? error.message : String(error)
-        }
-      });
-      
       return NextResponse.json({
         success: false,
+        taskId,
+        status: 'failed',
         error: {
           code: "PROCESSING_ERROR",
           message: "处理图片时出错",
