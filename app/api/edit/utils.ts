@@ -41,87 +41,44 @@ export async function extractImageIdFromUrl(imageUrl: string): Promise<string | 
  * 从飞书获取图片数据
  */
 export async function fetchImageFromFeishu(imageId: string) {
-  const MAX_RETRIES = 3; // 最大重试次数
-  let retryCount = 0;
-  let lastError = null;
-
-  while (retryCount < MAX_RETRIES) {
-    try {
-      console.log(`从飞书获取图片数据, ID: ${imageId}, 尝试次数: ${retryCount + 1}/${MAX_RETRIES}`);
-      
-      // 获取图片记录
-      const imageRecord = await getImageRecordById(imageId);
-      
-      if (!imageRecord || !imageRecord.id) {
-        throw new Error(`无法获取图片记录或记录不完整，ID: ${imageId}`);
-      }
-      
-      // 检查URL格式是否正确
-      if (!imageRecord.url || !imageRecord.url.includes('open.feishu.cn')) {
-        throw new Error(`图片URL格式不正确: ${imageRecord.url}`);
-      }
-      
-      // 获取access token
-      const token = await getAccessToken();
-      
-      if (!token) {
-        throw new Error('无法获取飞书访问令牌');
-      }
-      
-      // 从飞书下载图片 - 增加超时设置
-      const response = await axios.get(imageRecord.url, {
-        headers: {
-          'Authorization': `Bearer ${token}`,
-        },
-        responseType: 'arraybuffer',
-        timeout: 10000 // 10秒超时
-      });
-      
-      // 验证响应
-      if (!response.data || response.data.length === 0) {
-        throw new Error('飞书返回了空图片数据');
-      }
-      
-      // 转换为base64
-      const imageData = Buffer.from(response.data).toString('base64');
-      const mimeType = response.headers['content-type'] || 'image/png';
-      
-      console.log(`成功获取图片数据，大小: ${Math.round(imageData.length / 1024)}KB, 类型: ${mimeType}`);
-      
-      return {
-        imageData,
-        mimeType,
-        imageRecord
-      };
-    } catch (error) {
-      lastError = error;
-      retryCount++;
-      
-      // 详细记录错误信息
-      console.error(`获取飞书图片数据失败 (尝试 ${retryCount}/${MAX_RETRIES}):`, {
-        message: error.message,
-        stack: error.stack,
-        response: error.response ? {
-          status: error.response.status,
-          statusText: error.response.statusText,
-          headers: error.response.headers
-        } : 'No response'
-      });
-      
-      if (retryCount < MAX_RETRIES) {
-        // 指数退避重试，避免过快重试导致限流
-        const delay = Math.pow(2, retryCount) * 1000;
-        console.log(`将在 ${delay}ms 后重试...`);
-        await new Promise(resolve => setTimeout(resolve, delay));
-      }
+  try {
+    console.log(`从飞书获取图片数据, ID: ${imageId}`);
+    
+    // 获取图片记录
+    const imageRecord = await getImageRecordById(imageId);
+    
+    if (!imageRecord || !imageRecord.id) {
+      throw new Error(`无法获取图片记录或记录不完整，ID: ${imageId}`);
     }
+    
+    // 获取access token
+    const token = await getAccessToken();
+    
+    if (!token) {
+      throw new Error('无法获取飞书访问令牌');
+    }
+    
+    // 从飞书下载图片
+    const response = await axios.get(imageRecord.url, {
+      headers: {
+        'Authorization': `Bearer ${token}`,
+      },
+      responseType: 'arraybuffer'
+    });
+    
+    // 转换为base64
+    const imageData = Buffer.from(response.data).toString('base64');
+    const mimeType = response.headers['content-type'] || 'image/png';
+    
+    return {
+      imageData,
+      mimeType,
+      imageRecord
+    };
+  } catch (error) {
+    console.error(`获取飞书图片数据失败:`, error);
+    throw error;
   }
-  
-  // 所有重试都失败了，提供更多错误信息
-  console.error(`获取飞书图片彻底失败，已重试 ${MAX_RETRIES} 次`, lastError);
-  
-  // 抛出带有更详细信息的错误
-  throw new Error(`无法从飞书获取图片 (ID: ${imageId})，已重试 ${MAX_RETRIES} 次: ${lastError?.message || '未知错误'}`);
 }
 
 /**
