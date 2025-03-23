@@ -89,9 +89,19 @@ export async function callGeminiApi(prompt: string, imageData: string, mimeType:
     console.log(`尝试编辑图片, 尝试次数: ${retries + 1}/${MAX_RETRIES}`);
     
     // 初始化模型
-    const model = genAI.getGenerativeModel({ model: MODEL_ID });
+    const model = genAI.getGenerativeModel({ 
+      model: MODEL_ID,
+      generationConfig: {
+        temperature: 0.4,
+        topP: 0.8,
+        topK: 32,
+        maxOutputTokens: 4096,
+      }
+    });
     
     // 构建提示
+    const textPrompt = `我需要你编辑这张图片，按照以下要求：${prompt}。请只返回编辑后的图片，除非处理失败，不要返回任何代码或文本。`;
+    
     const imagePrompt = {
       inlineData: {
         data: imageData,
@@ -99,37 +109,62 @@ export async function callGeminiApi(prompt: string, imageData: string, mimeType:
       }
     };
     
-    // 调用API
-    const result = await model.startChat().sendMessage([
-      prompt,
+    // 直接使用generateContent进行单次调用，避免使用chat历史
+    const result = await model.generateContent([
+      textPrompt,
       imagePrompt
     ]);
     
     console.log(`API调用成功`);
     
-    // 检查响应是否有效
-    // 根据API文档，检查response的内容
-    const responseText = typeof result.response?.text === 'function' 
-      ? result.response?.text() 
-      : result.response?.text;
-    const textContent = responseText ? responseText.trim() : '';
-    const candidateParts = result.response?.candidates?.[0]?.content?.parts || [];
+    // 获取原始响应以便检查
+    const response = result.response;
     
-    // 判断响应是否为空
-    const isEmpty = (!textContent || textContent === '') && candidateParts.length === 0;
-    
-    if (isEmpty) {
-      console.warn(`API调用成功但返回了空响应`);
+    // 检查是否存在候选结果
+    if (!response || !response.candidates || response.candidates.length === 0) {
+      console.warn(`API调用成功但返回了无效响应`);
       if (retries < MAX_RETRIES - 1) {
-        console.log(`将在 ${RETRY_DELAY_MS}ms 后重试空响应...`);
+        console.log(`将在 ${RETRY_DELAY_MS}ms 后重试无效响应...`);
         await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
         return callGeminiApi(prompt, imageData, mimeType, retries + 1);
       }
       return {
         response: null,
         isError: true,
-        error: new Error("API返回了空响应")
+        error: new Error("API返回了无效响应")
       };
+    }
+    
+    // 检查是否包含有效内容
+    const candidate = response.candidates[0];
+    const parts = candidate.content?.parts || [];
+    
+    // 验证是否有图片内容
+    const hasImageContent = parts.some(part => {
+      if (part.inlineData) {
+        return true;
+      }
+      
+      // 动态检查可能存在的内联数据字段（兼容不同API版本）
+      if ((part as any).inline_data) {
+        return true;
+      }
+      
+      // 检查是否在文本中包含图片数据
+      if (part.text && typeof part.text === 'string' && part.text.includes('data:image/')) {
+        return true;
+      }
+      
+      return false;
+    });
+    
+    if (!hasImageContent) {
+      console.warn(`API响应中没有图片内容`);
+      if (retries < MAX_RETRIES - 1) {
+        console.log(`将在 ${RETRY_DELAY_MS}ms 后重试获取图片内容...`);
+        await new Promise(resolve => setTimeout(resolve, RETRY_DELAY_MS));
+        return callGeminiApi(prompt, imageData, mimeType, retries + 1);
+      }
     }
     
     return {
@@ -172,10 +207,25 @@ export function parseGeminiResponse(response: any) {
       };
     }
 
+    // 如果响应是函数或非预期类型，拒绝处理
+    if (typeof response === 'function' || 
+        (typeof response === 'string' && response.includes('function(') && response.includes('return'))) {
+      console.error('API返回了无效的响应类型:', typeof response);
+      return {
+        imageData: null,
+        mimeType: 'image/png',
+        textResponse: '处理失败：API返回了无效的响应类型'
+      };
+    }
+
     // 处理不同版本API响应格式
     let textResponse = '';
     let imageData: string | null = null;
     let mimeType = 'image/png';
+    
+    // 记录响应类型便于调试
+    console.log('响应类型:', typeof response);
+    console.log('响应结构:', Object.keys(response).join(', '));
     
     // 1. 尝试获取text响应
     if (response.text) {
@@ -191,7 +241,7 @@ export function parseGeminiResponse(response: any) {
     const parts = response.parts || [];
     // 版本2: 从candidates
     const candidateParts = response.candidates?.[0]?.content?.parts || 
-                           response.response?.candidates?.[0]?.content?.parts || [];
+                          response.response?.candidates?.[0]?.content?.parts || [];
     
     // 记录部分数量
     console.log(`成功获取响应，parts: ${parts.length}个, candidateParts: ${candidateParts.length}个`);
@@ -211,6 +261,8 @@ export function parseGeminiResponse(response: any) {
     
     // 遍历所有部分寻找图片数据
     for (const part of allParts) {
+      if (!part) continue;
+      
       // 处理文本
       if (part.text && typeof part.text === 'string') {
         textResponse += part.text;
@@ -233,9 +285,16 @@ export function parseGeminiResponse(response: any) {
     }
     
     // 如果没有找到图片数据但有文本，附加错误信息
-    if (!imageData && textResponse) {
+    if (!imageData) {
       console.warn(`未找到图片数据，仅返回文本响应`);
-      textResponse = `[错误] 未能生成图片，API返回: ${textResponse}`;
+      
+      // 截断过长的错误响应，防止无用的冗长输出
+      const maxLength = 100;
+      const truncatedResponse = textResponse && textResponse.length > maxLength 
+        ? textResponse.substring(0, maxLength) + '...[响应过长，已截断]' 
+        : textResponse;
+        
+      textResponse = `未能生成图片，请尝试使用更具体的描述或更换图片`;
     }
     
     return {
