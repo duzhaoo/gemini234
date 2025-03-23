@@ -1,14 +1,44 @@
 "use client";
 
-import { useState, useEffect, useRef } from "react";
-import { Button } from "@/components/ui/button";
-import { Textarea } from "@/components/ui/textarea";
-import { Input } from "@/components/ui/input";
-import { Label } from "@/components/ui/label";
-import { Card, CardContent, CardFooter, CardHeader, CardTitle } from "@/components/ui/card";
-import Image from "next/image";
-import { Upload, ImageIcon, RefreshCcw } from "lucide-react";
-import { Progress } from "@/components/ui/progress";
+import React, { useState, useEffect, useRef } from "react";
+import { 
+  Card, 
+  CardContent, 
+  CardDescription, 
+  CardFooter, 
+  CardHeader, 
+  CardTitle 
+} from "@/components/ui/card";
+import { 
+  Button 
+} from "@/components/ui/button";
+import { 
+  Input 
+} from "@/components/ui/input";
+import { 
+  Textarea 
+} from "@/components/ui/textarea";
+import { 
+  Label 
+} from "@/components/ui/label";
+import { 
+  Progress 
+} from "@/components/ui/progress";
+import { 
+  ImageIcon, 
+  Upload 
+} from "lucide-react";
+import {
+  Alert,
+  AlertCircle,
+  AlertDescription,
+  AlertTitle
+} from "@/components/ui/alert";
+import { 
+  Loader2, 
+  InfoIcon, 
+  CheckIcon 
+} from "lucide-react";
 
 interface ImageEditorFormProps {
   onImageEdited?: (imageUrl: string) => void;
@@ -30,61 +60,71 @@ export function ImageEditorForm({
   const [error, setError] = useState<string | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
-  // 新增状态
+  const [resultImage, setResultImage] = useState<string | null>(null);
+  const [statusMessage, setStatusMessage] = useState<string | null>(null);
   const [taskId, setTaskId] = useState<string | null>(null);
-  const [taskStatus, setTaskStatus] = useState<string>("pending");
-  const [statusMessage, setStatusMessage] = useState<string>("");
-  const [pollingCount, setPollingCount] = useState(0);
-  
-  // Update imageUrl when initialImageUrl changes
-  useEffect(() => {
-    if (initialImageUrl) {
-      setImageUrl(initialImageUrl);
-      setPreviewUrl(initialImageUrl);
-    }
-  }, [initialImageUrl]);
+  const [pollingCount, setPollingCount] = useState<number>(0);
+  const [taskStatus, setTaskStatus] = useState<'idle' | 'uploading' | 'uploaded' | 'processing' | 'completed' | 'failed'>('idle');
+  const [uploadedImage, setUploadedImage] = useState<{url: string, imageId: string} | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // 清理预览URL
-  useEffect(() => {
-    return () => {
-      if (previewUrl && previewUrl.startsWith('blob:')) {
-        URL.revokeObjectURL(previewUrl);
-      }
-    };
-  }, [previewUrl]);
+  // 重置表单
+  const resetForm = () => {
+    setImageUrl("");
+    setPrompt("");
+    setSelectedFile(null);
+    setError(null);
+    setIsLoading(false);
+    setResultImage(null);
+    setStatusMessage(null);
+    setTaskId(null);
+    setPollingCount(0);
+    setTaskStatus('idle');
+    setUploadedImage(null);
+  };
 
   // 处理文件选择
   const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
-    if (file) {
-      if (file.type.startsWith('image/')) {
-        setSelectedFile(file);
-        // 创建预览
-        const url = URL.createObjectURL(file);
-        setPreviewUrl(url);
-        setImageUrl(''); // 清空URL输入，因为用户选择了上传的文件
-        setError(null);
-      } else {
-        setError('请选择有效的图片文件（JPEG、PNG等）');
-        setSelectedFile(null);
+    if (e.target.files && e.target.files.length > 0) {
+      const file = e.target.files[0];
+      // 检查文件类型
+      if (!file.type.startsWith('image/')) {
+        setError("请选择有效的图片文件");
+        return;
+      }
+      
+      setSelectedFile(file);
+      setError(null);
+      
+      // 如果已经有URL，清除它
+      if (imageUrl) {
+        setImageUrl("");
       }
     }
   };
 
-  // 触发文件选择
-  const handleSelectFileClick = () => {
-    fileInputRef.current?.click();
+  // 处理URL输入
+  const handleUrlChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    setImageUrl(e.target.value);
+    
+    // 如果已经选择了文件，清除它
+    if (selectedFile) {
+      setSelectedFile(null);
+    }
+    
+    setError(null);
   };
 
-  const handleSubmit = async (e: React.FormEvent) => {
+  // 处理提示词输入
+  const handlePromptChange = (e: React.ChangeEvent<HTMLTextAreaElement>) => {
+    setPrompt(e.target.value);
+    setError(null);
+  };
+
+  // 第一步：上传图片到飞书
+  const handleUploadImage = async (e: React.FormEvent) => {
     e.preventDefault();
     
-    if (!prompt.trim()) {
-      setError("请输入编辑指令");
-      return;
-    }
-
     // 检查是否有图像来源（URL或上传的文件）
     if (!imageUrl && !selectedFile) {
       setError("请上传图片或输入图像网址");
@@ -93,10 +133,8 @@ export function ImageEditorForm({
 
     setIsLoading(true);
     setError(null);
-    setStatusMessage("准备处理图片...");
-    setTaskStatus("pending");
-    setTaskId(null);
-    setPollingCount(0);
+    setStatusMessage("准备上传图片...");
+    setTaskStatus("uploading");
 
     try {
       let targetImageUrl;
@@ -107,7 +145,7 @@ export function ImageEditorForm({
         formData.append('image', selectedFile);
         formData.append('prompt', "用户上传的原始图片"); // 添加固定提示词
         
-        setStatusMessage("正在上传图片...");
+        setStatusMessage("正在上传图片到飞书...");
         const uploadResponse = await fetch('/api/upload', {
           method: 'POST',
           body: formData
@@ -128,7 +166,44 @@ export function ImageEditorForm({
         // 使用输入的URL
         targetImageUrl = imageUrl;
       }
+
+      // 提取图片ID
+      const imageId = await extractImageIdFromUrl(targetImageUrl);
       
+      // 上传完成，设置状态
+      setUploadedImage({url: targetImageUrl, imageId});
+      setStatusMessage("图片已上传到飞书，请输入处理指令并点击处理图片");
+      setTaskStatus("uploaded");
+      setIsLoading(false);
+      
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "上传图片时发生错误");
+      setTaskStatus("failed");
+      setIsLoading(false);
+    }
+  };
+
+  // 第二步：发送到Gemini处理
+  const handleProcessImage = async (e: React.FormEvent) => {
+    e.preventDefault();
+    
+    if (!uploadedImage) {
+      setError("请先上传图片");
+      return;
+    }
+    
+    if (!prompt.trim()) {
+      setError("请输入编辑指令");
+      return;
+    }
+
+    setIsLoading(true);
+    setError(null);
+    setStatusMessage("准备处理图片...");
+    setTaskStatus("processing");
+    setPollingCount(0);
+
+    try {
       // 调用新的开始任务API
       setStatusMessage("正在启动编辑任务...");
       const startResponse = await fetch("/api/edit/start", {
@@ -136,7 +211,7 @@ export function ImageEditorForm({
         headers: {
           "Content-Type": "application/json",
         },
-        body: JSON.stringify({ prompt, imageUrl: targetImageUrl }),
+        body: JSON.stringify({ prompt, imageUrl: uploadedImage.url }),
       });
 
       if (!startResponse.ok) {
@@ -157,15 +232,9 @@ export function ImageEditorForm({
       }
       
       setTaskId(newTaskId);
-      setTaskStatus("processing");
       
       // 直接调用process API以获取结果，传递完整任务数据
       setStatusMessage("正在处理图片...");
-      const imageId = await extractImageIdFromUrl(targetImageUrl);
-      if (!imageId) {
-        throw new Error("无法从图片URL提取图片ID");
-      }
-      
       const processResponse = await fetch('/api/edit/process', {
         method: 'POST',
         headers: {
@@ -173,7 +242,7 @@ export function ImageEditorForm({
         },
         body: JSON.stringify({
           taskId: newTaskId,
-          imageId,
+          imageId: uploadedImage.imageId,
           prompt
         })
       });
@@ -201,11 +270,12 @@ export function ImageEditorForm({
       await saveProcessedImage(newTaskId, processData.data);
       
     } catch (err) {
-      setError(err instanceof Error ? err.message : "发生错误");
+      setError(err instanceof Error ? err.message : "处理图片时发生错误");
+      setTaskStatus("failed");
       setIsLoading(false);
     }
   };
-  
+
   // 轮询任务状态
   const pollTaskStatus = async (taskId: string) => {
     try {
@@ -264,7 +334,7 @@ export function ImageEditorForm({
       setIsLoading(false);
     }
   };
-  
+
   // 保存处理过的图片
   const saveProcessedImage = async (taskId: string, processData: any) => {
     try {
@@ -303,6 +373,9 @@ export function ImageEditorForm({
         if (onImageEdited) {
           onImageEdited(saveData.data.url);
         }
+        
+        // 保存处理结果图片
+        setResultImage(saveData.data.url);
       } else {
         throw new Error("保存成功但未返回图片URL");
       }
@@ -335,144 +408,166 @@ export function ImageEditorForm({
     }
   };
 
+  // Update imageUrl when initialImageUrl changes
+  useEffect(() => {
+    if (initialImageUrl) {
+      setImageUrl(initialImageUrl);
+      setPreviewUrl(initialImageUrl);
+    }
+  }, [initialImageUrl]);
+
+  // 清理预览URL
+  useEffect(() => {
+    return () => {
+      if (previewUrl && previewUrl.startsWith('blob:')) {
+        URL.revokeObjectURL(previewUrl);
+      }
+    };
+  }, [previewUrl]);
+
   return (
     <Card className="w-full">
       <CardHeader>
         <CardTitle>编辑图像</CardTitle>
       </CardHeader>
-      <form onSubmit={handleSubmit}>
-        <CardContent>
-          <div className="grid w-full gap-4">
-            <div className="flex flex-col space-y-2">
-              {readOnlyUrl ? (
-                <>
-                  <Label>使用图像</Label>
-                  <div className="relative aspect-video w-full overflow-hidden rounded-md border">
-                    {previewUrl && (
-                      <img
-                        src={previewUrl.startsWith('https://open.feishu.cn') 
-                          ? `/api/image-proxy?url=${encodeURIComponent(previewUrl)}` 
-                          : previewUrl}
-                        alt="要编辑的图像" 
-                        className="absolute inset-0 w-full h-full object-contain"
-                        onError={(e) => {
-                          console.error('图片加载失败:', previewUrl);
-                          e.currentTarget.src = '/placeholder-image.svg';
-                        }}
-                      />
-                    )}
-                  </div>
-                  <p className="text-xs text-muted-foreground">
-                    正在使用您刚才生成的图像进行编辑。
-                  </p>
-                </>
-              ) : (
-                <>
-                  <Label>选择图像</Label>
-                  <div className="grid gap-2">
-                    {/* 图片预览区域 */}
-                    <div 
-                      className="relative aspect-video w-full overflow-hidden rounded-md border border-dashed flex items-center justify-center"
-                      onClick={handleSelectFileClick}
-                    >
-                      {previewUrl ? (
-                        <img
-                          src={previewUrl.startsWith('https://open.feishu.cn') 
-                            ? `/api/image-proxy?url=${encodeURIComponent(previewUrl)}` 
-                            : previewUrl}
-                          alt="要编辑的图像" 
-                          className="absolute inset-0 w-full h-full object-contain"
-                          onError={(e) => {
-                            console.error('图片加载失败:', previewUrl);
-                            e.currentTarget.src = '/placeholder-image.svg';
-                          }}
-                        />
-                      ) : (
-                        <div className="flex flex-col items-center justify-center text-muted-foreground p-4">
-                          <ImageIcon className="h-10 w-10 mb-2" />
-                          <p>点击选择图像或拖放图片到此处</p>
-                        </div>
-                      )}
-                    </div>
-                    
-                    {/* 上传按钮 */}
-                    <div className="flex items-center gap-2">
-                      <Button 
-                        type="button" 
-                        variant="secondary" 
-                        onClick={handleSelectFileClick}
-                        disabled={isLoading}
-                        className="w-full"
-                      >
-                        <Upload className="h-4 w-4 mr-2" />
-                        选择图片
-                      </Button>
-                      <input
-                        ref={fileInputRef}
-                        type="file"
-                        accept="image/*"
-                        onChange={handleFileChange}
-                        className="hidden"
-                      />
-                    </div>
-                    
-                    {/* 可选的URL输入 */}
-                    <div className="flex flex-col mt-2">
-                      <p className="text-sm text-muted-foreground mb-1">或输入图像URL:</p>
-                      <Input
-                        id="imageUrl"
-                        placeholder="输入要编辑的图像网址"
-                        value={imageUrl}
-                        onChange={(e) => {
-                          setImageUrl(e.target.value);
-                          if (e.target.value) {
-                            setPreviewUrl(e.target.value);
-                            setSelectedFile(null);
-                          }
-                        }}
-                        disabled={isLoading}
-                      />
-                    </div>
-                  </div>
-                </>
-              )}
+      <CardContent>
+        {error && (
+          <Alert variant="destructive" className="mb-4">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>错误</AlertTitle>
+            <AlertDescription>{error}</AlertDescription>
+          </Alert>
+        )}
+        
+        {statusMessage && (
+          <Alert className="mb-4">
+            <InfoIcon className="h-4 w-4" />
+            <AlertTitle>状态</AlertTitle>
+            <AlertDescription>{statusMessage}</AlertDescription>
+          </Alert>
+        )}
+        
+        {resultImage && (
+          <div className="mb-4">
+            <h3 className="text-lg font-medium mb-2">处理结果</h3>
+            <div className="rounded-lg overflow-hidden border border-gray-200">
+              <img src={resultImage} alt="处理结果" className="w-full h-auto" />
             </div>
-            <div className="flex flex-col space-y-2">
-              <Label htmlFor="prompt">修改指令</Label>
-              <Textarea
-                id="prompt"
-                placeholder="输入描述你想要的图像的文本..."
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                disabled={isLoading}
-                className="min-h-32 resize-none"
-              />
-            </div>
-            
-            {/* 新增：处理状态和进度显示 */}
-            {isLoading && (
-              <div className="flex flex-col space-y-2 mt-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm font-medium">{statusMessage}</span>
-                  <span className="text-xs text-muted-foreground">
-                    {taskStatus === "processing" && `轮询中 (${pollingCount})`}
-                  </span>
-                </div>
-                <Progress value={taskStatus === "completed" ? 100 : pollingCount * 5} />
-              </div>
-            )}
-            
-            {error && (
-              <div className="text-red-500 text-sm mt-2">{error}</div>
-            )}
           </div>
-        </CardContent>
-        <CardFooter>
-          <Button type="submit" disabled={isLoading} className="w-full">
-            {isLoading ? "编辑中..." : "编辑图像"}
-          </Button>
-        </CardFooter>
-      </form>
+        )}
+        
+        <div className="space-y-4">
+          {/* 第一步：上传图片部分 */}
+          <div className={`border p-4 rounded-lg ${taskStatus === 'uploaded' || taskStatus === 'processing' || taskStatus === 'completed' ? 'bg-muted' : ''}`}>
+            <h3 className="text-lg font-medium mb-2">第一步：选择图片</h3>
+            <div className="space-y-3">
+              <div className="grid w-full items-center gap-1.5">
+                <Label htmlFor="image-upload">上传图片</Label>
+                <Input
+                  id="image-upload"
+                  type="file"
+                  accept="image/*"
+                  onChange={handleFileChange}
+                  disabled={isLoading || taskStatus === 'uploaded' || taskStatus === 'processing' || taskStatus === 'completed'}
+                />
+              </div>
+              
+              <div className="text-center my-2">
+                <span className="text-sm text-gray-500">或</span>
+              </div>
+              
+              <div className="grid w-full items-center gap-1.5">
+                <Label htmlFor="image-url">图片URL</Label>
+                <Input
+                  id="image-url"
+                  type="text"
+                  placeholder="输入图片URL"
+                  value={imageUrl}
+                  onChange={handleUrlChange}
+                  disabled={isLoading || taskStatus === 'uploaded' || taskStatus === 'processing' || taskStatus === 'completed'}
+                />
+              </div>
+              
+              <Button 
+                onClick={handleUploadImage} 
+                disabled={isLoading || (!imageUrl && !selectedFile) || taskStatus === 'uploaded' || taskStatus === 'processing' || taskStatus === 'completed'}
+                className="w-full"
+              >
+                {isLoading && taskStatus === 'uploading' ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    上传中...
+                  </>
+                ) : taskStatus === 'uploaded' ? (
+                  <>
+                    <CheckIcon className="mr-2 h-4 w-4" />
+                    已上传
+                  </>
+                ) : (
+                  "上传图片"
+                )}
+              </Button>
+            </div>
+          </div>
+          
+          {/* 第二步：处理图片部分 */}
+          <div className={`border p-4 rounded-lg ${taskStatus !== 'uploaded' && taskStatus !== 'processing' && taskStatus !== 'completed' ? 'opacity-50' : ''}`}>
+            <h3 className="text-lg font-medium mb-2">第二步：处理图片</h3>
+            <div className="space-y-3">
+              {uploadedImage && (
+                <div className="mb-4 text-center">
+                  <div className="text-sm text-green-600 mb-2">图片已上传 ✓</div>
+                  <div className="rounded-lg overflow-hidden border border-gray-200 max-h-48">
+                    <img src={uploadedImage.url} alt="已上传图片" className="w-full h-auto object-contain" />
+                  </div>
+                </div>
+              )}
+              
+              <div className="grid w-full items-center gap-1.5">
+                <Label htmlFor="prompt">处理指令</Label>
+                <Textarea
+                  id="prompt"
+                  placeholder="例如：给这张人像添加漫画风格"
+                  value={prompt}
+                  onChange={handlePromptChange}
+                  disabled={isLoading || taskStatus === 'processing' || taskStatus === 'completed' || taskStatus !== 'uploaded'}
+                  className="min-h-[100px]"
+                />
+              </div>
+              
+              <Button 
+                onClick={handleProcessImage} 
+                disabled={isLoading || !prompt.trim() || !uploadedImage || taskStatus === 'processing' || taskStatus === 'completed'}
+                className="w-full"
+              >
+                {isLoading && taskStatus === 'processing' ? (
+                  <>
+                    <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    处理中...
+                  </>
+                ) : taskStatus === 'completed' ? (
+                  <>
+                    <CheckIcon className="mr-2 h-4 w-4" />
+                    处理完成
+                  </>
+                ) : (
+                  "处理图片"
+                )}
+              </Button>
+            </div>
+          </div>
+          
+          <div className="flex justify-between">
+            <Button
+              variant="outline"
+              onClick={resetForm}
+              disabled={isLoading}
+            >
+              重置
+            </Button>
+          </div>
+        </div>
+      </CardContent>
     </Card>
   );
 }
