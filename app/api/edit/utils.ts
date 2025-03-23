@@ -247,7 +247,19 @@ export function parseGeminiResponse(result: any) {
     const response = result.response;
     
     // 笔记下完整响应，便于调试
-    console.log("响应全文（字符串化）：", JSON.stringify(response).substring(0, 200) + "...");
+    // 显示足够长的响应内容来帮助调试
+    const responseStr = JSON.stringify(response);
+    console.log("响应全文（字符串化）开始：", responseStr.substring(0, 200) + "...");
+    console.log("响应全文长度：", responseStr.length);
+    
+    // 手动提取响应中的base64数据
+    if (responseStr.includes('"data":"')) {
+      const dataStart = responseStr.indexOf('"data":"') + 8;
+      const dataEnd = responseStr.indexOf('"', dataStart);
+      if (dataStart > 8 && dataEnd > dataStart) {
+        console.log(`发现base64数据，起始位置: ${dataStart}, 结束位置: ${dataEnd}, 长度: ${dataEnd-dataStart}`);
+      }
+    }
     
     let textResponse = null;
     let imageData = null;
@@ -324,6 +336,35 @@ export function parseGeminiResponse(result: any) {
       if (b64Match) {
         console.log("找到可能的base64数据");
         imageData = b64Match[0];
+      }
+    }
+    
+    // 最后的补救措施：直接从响应字符串中提取base64数据
+    if (!imageData) {
+      console.log("尝试直接从响应字符串中提取数据...");
+      const responseStr = JSON.stringify(response);
+      
+      // 直接搜索inlineData结构
+      if (responseStr.includes('"inlineData":{"mimeType":"image/')) {
+        console.log("在响应中找到完整的inlineData结构");
+        
+        try {
+          // 提取mimeType
+          const mimeMatch = responseStr.match(/"mimeType":"([^"]+)"/); 
+          if (mimeMatch && mimeMatch[1]) {
+            imageMimeType = mimeMatch[1];
+            console.log(`找到mimeType: ${imageMimeType}`);
+          }
+          
+          // 提取data
+          const dataMatch = responseStr.match(/"data":"([^"]+)"/); 
+          if (dataMatch && dataMatch[1]) {
+            imageData = dataMatch[1];
+            console.log(`找到base64数据，长度: ${imageData.length}`);
+          }
+        } catch (extractErr) {
+          console.error("从响应字符串提取数据时出错:", extractErr);
+        }
       }
     }
     
