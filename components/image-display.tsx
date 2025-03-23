@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect } from "react";
+import { useState, useEffect, useRef } from "react";
 import Image from "next/image";
 import { Card, CardContent } from "@/components/ui/card";
 
@@ -12,10 +12,14 @@ interface ImageDisplayProps {
 export function ImageDisplay({ imageUrl, isVercelEnv }: ImageDisplayProps) {
   const [isLoading, setIsLoading] = useState(true);
   const [imgSrc, setImgSrc] = useState<string | null>(null);
+  // 添加重试计数器
+  const retryCountRef = useRef(0);
 
   useEffect(() => {
     if (imageUrl) {
       setIsLoading(true);
+      // 重置重试计数
+      retryCountRef.current = 0;
       
       // 检查是否是飞书URL
       const isFeishuUrl = imageUrl.includes('open.feishu.cn');
@@ -66,8 +70,27 @@ export function ImageDisplay({ imageUrl, isVercelEnv }: ImageDisplayProps) {
               onLoad={() => setIsLoading(false)}
               onError={(e) => {
                 console.error('图片加载失败:', imgSrc);
-                e.currentTarget.src = '/placeholder-image.svg';
-                setIsLoading(false);
+                
+                // 实现有限重试逻辑
+                if (retryCountRef.current < 1) {
+                  // 只重试一次
+                  retryCountRef.current += 1;
+                  console.log(`重试加载图片 (${retryCountRef.current}/1): ${imgSrc}`);
+                  
+                  // 添加时间戳参数避免缓存
+                  const timestamp = new Date().getTime();
+                  const retrySrc = imgSrc.includes('?') 
+                    ? `${imgSrc}&_retry=${timestamp}` 
+                    : `${imgSrc}?_retry=${timestamp}`;
+                  
+                  // 重置图片源以触发重新加载
+                  e.currentTarget.src = retrySrc;
+                } else {
+                  // 达到最大重试次数，使用占位图片
+                  console.log('达到最大重试次数，使用占位图片');
+                  e.currentTarget.src = '/placeholder-image.svg';
+                  setIsLoading(false);
+                }
               }}
             />
           )}
