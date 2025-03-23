@@ -70,40 +70,34 @@ export async function POST(req: NextRequest) {
       }
       
       // 解析响应
-      const { imageData: processedImageData, mimeType: responseType, textResponse } = parseGeminiResponse(result.response);
-      
-      if (!processedImageData) {
-        console.error("未能生成图片，文本响应:", textResponse);
+      try {
+        const parsedResponse = parseGeminiResponse(result);
+
+        // 如果图片处理成功，返回结果
+        if (parsedResponse.image && parsedResponse.image.data) {
+          console.log(`成功处理图片`);
+          return NextResponse.json({
+            success: true,
+            data: {
+              imageData: parsedResponse.image.data,
+              mimeType: parsedResponse.image.mimeType,
+              text: parsedResponse.text || "图片处理完成",
+              taskId: taskId
+            }
+          } as ApiResponse);
+        } else {
+          throw new Error("未找到有效的图片数据");
+        }
+      } catch (parseError) {
+        console.error(`解析API响应失败:`, parseError);
         return NextResponse.json({
           success: false,
-          taskId,
-          status: 'failed',
           error: {
-            code: "NO_IMAGE_GENERATED",
-            message: "未能生成图片",
-            details: textResponse || "Gemini API未返回图片数据"
+            code: "PARSE_ERROR",
+            message: `解析API响应时出错: ${parseError instanceof Error ? parseError.message : String(parseError)}`
           }
         } as ApiResponse, { status: 500 });
       }
-      
-      console.log(`图片处理成功，返回处理后的图片数据，任务ID: ${taskId}`);
-      
-      // 返回处理结果
-      return NextResponse.json({
-        success: true,
-        taskId,
-        status: 'processing',
-        progress: 80,
-        data: {
-          processedImageData,
-          responseType,
-          imageRecord: {
-            id: imageRecord.id,
-            fileToken: imageRecord.fileToken,
-            type: imageRecord.type
-          }
-        }
-      } as ApiResponse);
       
     } catch (error: any) {
       console.error(`处理图片失败:`, error);
