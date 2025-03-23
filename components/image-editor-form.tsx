@@ -426,11 +426,18 @@ export function ImageEditorForm({
         {resultImage && (
           <div className="mb-4">
             <h3 className="text-lg font-medium mb-2">处理结果</h3>
-            <div className="rounded-lg overflow-hidden border border-gray-200 p-4 bg-green-100">
-              <p className="text-center text-gray-800">
-                <CheckIcon className="inline-block w-5 h-5 mr-2 text-green-600" />
-                图片处理成功 - 请点击"使用该图片"查看结果
-              </p>
+            <div className="rounded-lg overflow-hidden border border-gray-200">
+              <img 
+                src={resultImage.startsWith('https://open.feishu.cn') 
+                  ? `/api/image-proxy?url=${encodeURIComponent(resultImage)}` 
+                  : resultImage} 
+                alt="处理结果" 
+                className="w-full h-auto" 
+                onError={(e) => {
+                  console.error('结果图片加载失败:', resultImage);
+                  e.currentTarget.src = '/placeholder-image.svg';
+                }}
+              />
             </div>
           </div>
         )}
@@ -496,11 +503,19 @@ export function ImageEditorForm({
               {uploadedImage && (
                 <div className="mb-4 text-center">
                   <div className="text-sm text-green-600 mb-2">图片已上传 ✓</div>
-                  <div className="rounded-lg overflow-hidden border border-gray-200 p-4 bg-purple-100">
-                    <p className="text-center text-gray-800">
-                      <ImageIcon className="inline-block w-5 h-5 mr-2 text-purple-600" />
-                      已上传图片 (ID: {uploadedImage.imageId?.substring(0, 8)}...)
-                    </p>
+                  <div className="rounded-lg overflow-hidden border border-gray-200 max-h-48">
+                    <img 
+                      src={uploadedImage.url.startsWith('https://open.feishu.cn') 
+                        ? `/api/image-proxy?url=${encodeURIComponent(uploadedImage.url)}` 
+                        : uploadedImage.url} 
+                      alt="已上传图片" 
+                      className="w-full h-auto object-contain" 
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.src = "/placeholder-image.png";
+                        console.error("图片加载失败:", uploadedImage.url);
+                      }}
+                    />
                   </div>
                 </div>
               )}

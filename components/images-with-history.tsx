@@ -623,12 +623,19 @@ export function ImagesWithHistory() {
                         >
                           
                           {item.isImage ? (
-                            // 删除图片显示逻辑，改为显示文本提示
-                            <div className="w-full max-w-[250px] p-2 bg-purple-100 rounded-lg">
-                              <p className="text-center text-gray-800">
-                                <ImageIcon className="inline-block w-5 h-5 mr-2 text-purple-600" />
-                                已生成图片
-                              </p>
+                            // 图片内容
+                            <div className="w-full max-w-[250px]">
+                              <div className="relative aspect-square overflow-hidden rounded-md">
+                                <img 
+                                  src={getImageSrc(item.content, isVercelEnv)}
+                                  alt="生成图片"
+                                  className="w-full h-full object-cover"
+                                  onError={(e) => {
+                                    console.error('图片加载失败:', item.content);
+                                    e.currentTarget.src = '/placeholder-image.svg';
+                                  }}
+                                />
+                              </div>
                             </div>
                           ) : (
                             // 文本内容

@@ -241,66 +241,138 @@ export function parseGeminiResponse(result: any) {
     let imageData = null;
     let imageMimeType = "image/png";
     
+    console.log("开始解析Gemini响应...");
+    
     if (!result || !result.response) {
+      console.warn("无效的响应格式：响应为空或缺少response字段");
       throw new Error("无效的响应格式");
     }
     
     const response = result.response;
-    console.log("开始解析Gemini响应...");
     
-    if (!response.candidates || response.candidates.length === 0) {
-      throw new Error("API响应中不包含候选结果");
-    }
-    
-    const candidate = response.candidates[0];
-    
-    if (!candidate.content || !candidate.content.parts || candidate.content.parts.length === 0) {
-      throw new Error("API响应中不包含内容部分");
-    }
-    
-    const parts = candidate.content.parts;
-    console.log(`响应包含 ${parts.length} 个部分`);
-    
-    // 遍历所有部分，寻找图片和文本
-    for (const part of parts) {
-      // 检查是否包含内联数据（图片）
-      if (part && "inlineData" in part && part.inlineData) {
-        console.log("从inlineData中提取图片");
-        imageData = part.inlineData.data;
-        imageMimeType = part.inlineData.mimeType || "image/png";
-      } 
-      // 检查替代格式（兼容不同API版本）
-      else if (part && (part as any).inline_data) {
-        console.log("从替代格式inline_data中提取图片");
-        const inlineData = (part as any).inline_data;
-        imageData = inlineData.data;
-        imageMimeType = inlineData.mimeType || "image/png";
-      } 
-      // 检查文本内容
-      else if (part && "text" in part && part.text) {
-        console.log("从响应中提取文本");
-        textResponse = part.text;
+    // 使用更健壮的条件检查，不在中间步骤抛出错误
+    if (response && response.candidates && response.candidates.length > 0 && 
+        response.candidates[0].content && response.candidates[0].content.parts) {
+      
+      const parts = response.candidates[0].content.parts;
+      console.log(`响应包含 ${parts.length} 个部分`);
+      
+      // 遍历所有部分，寻找图片和文本
+      for (const part of parts) {
+        // 检查是否包含内联数据（图片）
+        if (part && "inlineData" in part && part.inlineData) {
+          console.log("从inlineData中提取图片");
+          imageData = part.inlineData.data;
+          imageMimeType = part.inlineData.mimeType || "image/png";
+        } 
+        // 检查替代格式（兼容不同API版本）
+        else if (part && (part as any).inline_data) {
+          console.log("从替代格式inline_data中提取图片");
+          const inlineData = (part as any).inline_data;
+          imageData = inlineData.data;
+          imageMimeType = inlineData.mimeType || "image/png";
+        } 
+        // 检查文本内容
+        else if (part && "text" in part && part.text) {
+          console.log("从响应中提取文本");
+          textResponse = part.text;
+          
+          // 有时图片数据会在文本中返回
+          if (typeof part.text === 'string') {
+            // 寻找文本中的图片数据
+            const dataUrlMatch = part.text.match(/data:image\/[^;]+;base64,[a-zA-Z0-9+\/=]+/);
+            if (dataUrlMatch) {
+              console.log("从文本中提取图片数据URL");
+              const dataUrl = dataUrlMatch[0];
+              const parts = dataUrl.split(';base64,');
+              if (parts.length === 2) {
+                const mime = parts[0].replace('data:', '');
+                const base64Data = parts[1];
+                imageData = base64Data;
+                imageMimeType = mime;
+              }
+            }
+          }
+        }
+      }
+    } else {
+      // 尝试使用替代方法获取响应数据
+      console.warn("标准响应格式不满足条件，尝试替代方法解析响应");
+      
+      // 尝试直接获取原始部分
+      if (response.candidates) {
+        for (const candidate of response.candidates) {
+          if (candidate.content) {
+            const parts = candidate.content.parts || [];
+            console.log(`尝试从替代路径获取响应部分，找到 ${parts.length} 个部分`);
+            
+            for (const part of parts) {
+              if (part && part.inlineData) {
+                console.log("从替代路径中找到图片数据");
+                imageData = part.inlineData.data;
+                imageMimeType = part.inlineData.mimeType || "image/png";
+              } else if (part && typeof part === 'object' && 'text' in part) {
+                textResponse = part.text;
+              }
+            }
+          }
+        }
+      }
+      
+      // 尝试从直接路径访问
+      if (!imageData && response.text) {
+        console.log("尝试从response.text中获取数据");
+        textResponse = response.text;
         
-        // 有时图片数据会在文本中返回
-        if (typeof part.text === 'string') {
-          // 寻找文本中的图片数据
-          const dataUrlMatch = part.text.match(/data:image\/[^;]+;base64,[a-zA-Z0-9+/=]+/);
+        // 检查文本是否包含图片数据
+        if (typeof response.text === 'string') {
+          const dataUrlMatch = response.text.match(/data:image\/[^;]+;base64,[a-zA-Z0-9+\/=]+/);
           if (dataUrlMatch) {
-            console.log("从文本中提取图片数据URL");
             const dataUrl = dataUrlMatch[0];
             const parts = dataUrl.split(';base64,');
             if (parts.length === 2) {
-              const mime = parts[0].replace('data:', '');
-              const base64Data = parts[1];
-              imageData = base64Data;
-              imageMimeType = mime;
+              imageData = parts[1];
+              imageMimeType = parts[0].replace('data:', '');
             }
           }
+        }
+      }
+      
+      // 检查原始结果中是否有图片数据
+      if (!imageData && result.response && typeof result.response === 'object') {
+        console.log("从原始响应对象中查找图片数据");
+        const searchImageData = (obj: any, depth = 0): any => {
+          if (depth > 3) return null; // 限制搜索深度
+          
+          if (!obj || typeof obj !== 'object') return null;
+          
+          // 检查是否是图片数据对象
+          if (obj.data && obj.mimeType && obj.mimeType.startsWith('image/')) {
+            return { data: obj.data, mimeType: obj.mimeType };
+          }
+          
+          // 递归搜索对象的所有属性
+          for (const key in obj) {
+            if (typeof obj[key] === 'object') {
+              const found = searchImageData(obj[key], depth + 1);
+              if (found) return found;
+            }
+          }
+          
+          return null;
+        };
+        
+        const found = searchImageData(result.response);
+        if (found) {
+          console.log("在嵌套对象中找到图片数据");
+          imageData = found.data;
+          imageMimeType = found.mimeType;
         }
       }
     }
     
     if (!imageData) {
+      console.error("未找到图片数据");
       throw new Error("未找到图片数据");
     }
     
