@@ -9,36 +9,12 @@ import {
   CardHeader, 
   CardTitle 
 } from "@/components/ui/card";
-import { 
-  Button 
-} from "@/components/ui/button";
-import { 
-  Input 
-} from "@/components/ui/input";
-import { 
-  Textarea 
-} from "@/components/ui/textarea";
-import { 
-  Label 
-} from "@/components/ui/label";
-import { 
-  Progress 
-} from "@/components/ui/progress";
-import { 
-  ImageIcon, 
-  Upload 
-} from "lucide-react";
-import {
-  Alert,
-  AlertCircle,
-  AlertDescription,
-  AlertTitle
-} from "@/components/ui/alert";
-import { 
-  Loader2, 
-  InfoIcon, 
-  CheckIcon 
-} from "lucide-react";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { Label } from "@/components/ui/label";
+import { Progress } from "@/components/ui/progress";
+import { AlertCircle, ImageIcon, Upload, Loader2, InfoIcon, CheckIcon } from "lucide-react";
 
 interface ImageEditorFormProps {
   onImageEdited?: (imageUrl: string) => void;
@@ -432,19 +408,19 @@ export function ImageEditorForm({
       </CardHeader>
       <CardContent>
         {error && (
-          <Alert variant="destructive" className="mb-4">
+          <div className="mb-4 bg-red-100 border border-red-400 text-red-700 px-4 py-3 rounded relative" role="alert">
             <AlertCircle className="h-4 w-4" />
-            <AlertTitle>错误</AlertTitle>
-            <AlertDescription>{error}</AlertDescription>
-          </Alert>
+            <span className="font-bold">错误</span> 
+            <span className="block sm:inline">{error}</span>
+          </div>
         )}
         
         {statusMessage && (
-          <Alert className="mb-4">
+          <div className="mb-4 bg-blue-100 border border-blue-400 text-blue-700 px-4 py-3 rounded relative" role="alert">
             <InfoIcon className="h-4 w-4" />
-            <AlertTitle>状态</AlertTitle>
-            <AlertDescription>{statusMessage}</AlertDescription>
-          </Alert>
+            <span className="font-bold">状态</span> 
+            <span className="block sm:inline">{statusMessage}</span>
+          </div>
         )}
         
         {resultImage && (
