@@ -494,7 +494,16 @@ export function ImageEditorForm({
                 <div className="mb-4 text-center">
                   <div className="text-sm text-green-600 mb-2">图片已上传 ✓</div>
                   <div className="rounded-lg overflow-hidden border border-gray-200 max-h-48">
-                    <img src={uploadedImage.url} alt="已上传图片" className="w-full h-auto object-contain" />
+                    <img 
+                      src={`/api/proxy-image?url=${encodeURIComponent(uploadedImage.url)}`} 
+                      alt="已上传图片" 
+                      className="w-full h-auto object-contain" 
+                      onError={(e) => {
+                        const target = e.target as HTMLImageElement;
+                        target.src = "/placeholder-image.png";
+                        console.error("图片加载失败:", uploadedImage.url);
+                      }}
+                    />
                   </div>
                 </div>
               )}
