@@ -110,15 +110,22 @@ export async function callGeminiApi(prompt: string, imageData: string, mimeType:
     // 构建提示，使用更明确的语言
     const textPrompt = { text: `编辑这张图片：${enhancedPrompt}` };
     
-    // 确保图片数据格式正确
-    let processedImageData = imageData;
-    if (!imageData.startsWith('data:')) {
-      processedImageData = `data:${mimeType};base64,${imageData}`;
+    // 处理图片数据 - 确保只使用纯Base64编码的数据（无前缀）
+    let pureBase64Data = imageData;
+    
+    // 如果数据是Data URL格式，则提取纯Base64部分
+    if (imageData.startsWith('data:')) {
+      // 分离前缀和Base64数据
+      const base64Marker = ';base64,';
+      const baseIndex = imageData.indexOf(base64Marker) + base64Marker.length;
+      pureBase64Data = imageData.substring(baseIndex);
+      console.log('已从Data URL提取纯Base64数据');
     }
     
+    // 构建图片提示
     const imagePrompt = {
       inlineData: {
-        data: processedImageData,
+        data: pureBase64Data,
         mimeType: mimeType
       }
     };
