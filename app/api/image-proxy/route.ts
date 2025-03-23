@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from "next/server";
 import { getAccessToken } from "@/lib/feishu";
 import axios from "axios";
+import fs from 'fs';
+import path from 'path';
 
 /**
  * 记录图片请求错误
@@ -83,6 +85,56 @@ function extractImageId(url: string): string | null {
 }
 
 /**
+ * 获取占位图片数据
+ * 从public目录读取占位图片
+ */
+async function getPlaceholderImage() {
+  try {
+    // 基于环境确定正确的路径
+    let placeholderPath;
+    if (process.env.NODE_ENV === 'development') {
+      // 开发环境，使用相对路径
+      placeholderPath = path.join(process.cwd(), 'public', 'placeholder-image.svg');
+    } else {
+      // 生产环境，尝试使用绝对路径
+      placeholderPath = '/var/task/public/placeholder-image.svg';
+    }
+    
+    // 检查文件是否存在，不存在则使用硬编码的SVG
+    if (fs.existsSync(placeholderPath)) {
+      const imageData = fs.readFileSync(placeholderPath);
+      return {
+        data: imageData,
+        contentType: 'image/svg+xml'
+      };
+    } else {
+      // 提供一个基本的SVG占位图作为备选
+      const fallbackSvg = `<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
+        <rect width="400" height="300" fill="#f0f0f0"/>
+        <text x="50%" y="50%" font-family="Arial" font-size="20" text-anchor="middle" fill="#999">图片加载失败</text>
+      </svg>`;
+      
+      return {
+        data: Buffer.from(fallbackSvg),
+        contentType: 'image/svg+xml'
+      };
+    }
+  } catch (error) {
+    console.error('获取占位图片失败:', error);
+    // 提供一个最简单的SVG占位图
+    const simpleSvg = `<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
+      <rect width="400" height="300" fill="#eee"/>
+      <text x="50%" y="50%" font-family="Arial" font-size="20" text-anchor="middle">加载失败</text>
+    </svg>`;
+    
+    return {
+      data: Buffer.from(simpleSvg),
+      contentType: 'image/svg+xml'
+    };
+  }
+}
+
+/**
  * 图片代理API的处理函数
  * 用于请求飞书图片并应用适当的缓存和头信息
  */
@@ -91,21 +143,45 @@ export async function GET(req: NextRequest) {
     // 1. 获取源图片URL
     const sourceUrl = req.nextUrl.searchParams.get('url');
     if (!sourceUrl) {
-      return NextResponse.json({ error: '缺少URL参数' }, { status: 400 });
+      // 返回占位图片而不是JSON错误
+      const placeholder = await getPlaceholderImage();
+      return new NextResponse(placeholder.data, {
+        headers: {
+          'Content-Type': placeholder.contentType,
+          'Cache-Control': 'public, max-age=86400',
+          'X-Error': '缺少URL参数'
+        }
+      });
     }
     
     console.log(`收到图片请求: ${sourceUrl}`);
     
     // 2. 验证URL是否为飞书图片URL
     if (!sourceUrl.includes('open.feishu.cn')) {
-      return NextResponse.json({ error: '只支持飞书图片地址' }, { status: 400 });
+      // 返回占位图片而不是JSON错误
+      const placeholder = await getPlaceholderImage();
+      return new NextResponse(placeholder.data, {
+        headers: {
+          'Content-Type': placeholder.contentType,
+          'Cache-Control': 'public, max-age=86400',
+          'X-Error': '只支持飞书图片地址'
+        }
+      });
     }
     
     // 3. 从飞书图片URL提取图片ID
     const imageId = extractImageId(sourceUrl);
     if (!imageId) {
       logError('无法提取图片ID', { url: sourceUrl });
-      return NextResponse.json({ error: '无法提取图片ID' }, { status: 400 });
+      // 返回占位图片而不是JSON错误
+      const placeholder = await getPlaceholderImage();
+      return new NextResponse(placeholder.data, {
+        headers: {
+          'Content-Type': placeholder.contentType,
+          'Cache-Control': 'public, max-age=86400',
+          'X-Error': '无法提取图片ID'
+        }
+      });
     }
     
     console.log(`提取到图片ID: ${imageId}`);
@@ -114,7 +190,15 @@ export async function GET(req: NextRequest) {
     const token = await getAccessToken();
     if (!token) {
       logError('获取飞书令牌失败');
-      return NextResponse.json({ error: '获取访问令牌失败' }, { status: 500 });
+      // 返回占位图片而不是JSON错误
+      const placeholder = await getPlaceholderImage();
+      return new NextResponse(placeholder.data, {
+        headers: {
+          'Content-Type': placeholder.contentType,
+          'Cache-Control': 'public, max-age=86400',
+          'X-Error': '获取访问令牌失败'
+        }
+      });
     }
     
     // 5. 下载飞书图片
@@ -138,11 +222,16 @@ export async function GET(req: NextRequest) {
         error: downloadError instanceof Error ? downloadError.message : String(downloadError)
       });
       
-      // 7. 返回默认占位图片
-      return NextResponse.json(
-        { error: '下载图片失败', details: downloadError instanceof Error ? downloadError.message : 'unknown error' },
-        { status: 500 }
-      );
+      // 7. 返回占位图片而不是JSON错误
+      const placeholder = await getPlaceholderImage();
+      return new NextResponse(placeholder.data, {
+        headers: {
+          'Content-Type': placeholder.contentType,
+          'Cache-Control': 'public, max-age=3600', // 失败的图片只缓存1小时
+          'X-Error': '下载图片失败',
+          'X-Error-Details': downloadError instanceof Error ? downloadError.message : 'unknown error'
+        }
+      });
     }
   } catch (error) {
     // 全局错误处理
@@ -150,9 +239,29 @@ export async function GET(req: NextRequest) {
       error: error instanceof Error ? error.stack : String(error)
     });
     
-    return NextResponse.json(
-      { error: '服务器内部错误' },
-      { status: 500 }
-    );
+    // 返回占位图片而不是JSON错误
+    try {
+      const placeholder = await getPlaceholderImage();
+      return new NextResponse(placeholder.data, {
+        headers: {
+          'Content-Type': placeholder.contentType,
+          'Cache-Control': 'public, max-age=3600', // 失败的图片只缓存1小时
+          'X-Error': '服务器内部错误'
+        }
+      });
+    } catch (placeholderError) {
+      // 最后的备用方案 - 使用硬编码的简单SVG
+      const simpleSvg = `<svg width="400" height="300" xmlns="http://www.w3.org/2000/svg">
+        <rect width="400" height="300" fill="#eee"/>
+        <text x="200" y="150" font-family="Arial" font-size="20" text-anchor="middle">Error</text>
+      </svg>`;
+      
+      return new NextResponse(Buffer.from(simpleSvg), {
+        headers: {
+          'Content-Type': 'image/svg+xml',
+          'Cache-Control': 'no-cache'
+        }
+      });
+    }
   }
 }
